@@ -1,0 +1,10 @@
+// Cloudflare Workers (static assets) project "spellbricks" -> https://spellbricks.gilagames.com
+// No build step: run `python3 tools/build_site.py` and commit site/. Cloudflare runs `npx wrangler deploy`.
+{
+  "name": "spellbricks",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./site",
+    "not_found_handling": "single-page-application"
+  }
+}

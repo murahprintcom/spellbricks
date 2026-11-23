@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d1a">
+  <title>Spellbricks</title>
+  <meta name="description" content="Competitive elemental block battle with deckbuilding and roguelike runs. Every piece is a card.">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="screen" class="screen"></div>
+
+    <div id="battle" class="hidden">
+      <div id="stage"><canvas id="cv" aria-label="Battle arena"></canvas></div>
+      <button id="pauseBtn" class="icon-btn" title="Pause (Esc)" aria-label="Pause"></button>
+      <div id="touch" class="touch">
+        <div class="tgroup">
+          <button data-touch="left" aria-label="Move left"></button>
+          <button data-touch="right" aria-label="Move right"></button>
+        </div>
+        <div class="tgroup">
+          <button data-touch="hold" aria-label="Hold card"></button>
+          <button data-touch="soft" aria-label="Soft drop"></button>
+        </div>
+        <div class="tgroup">
+          <button data-touch="cw" aria-label="Rotate"></button>
+          <button data-touch="hard" class="big" aria-label="Hard drop"></button>
+        </div>
+      </div>
+    </div>
+
+    <div id="modal" class="modal hidden"></div>
+    <div id="toast" class="toast"></div>
+  </div>
+
+  <!-- core + data -->
+  <script src="js/core/util.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/data/shapes.js"></script>
+  <script src="js/data/elements.js"></script>
+  <script src="js/data/cards.js"></script>
+  <script src="js/data/relics.js"></script>
+  <script src="js/data/enemies.js"></script>
+  <script src="js/data/events.js"></script>
+  <script src="js/data/dungeons.js"></script>
+  <script src="js/data/sprites.js"></script>
+  <script src="js/data/heroes.js"></script>
+  <!-- game systems -->
+  <script src="js/systems/board.js"></script>
+  <script src="js/systems/deck.js"></script>
+  <script src="js/systems/elemental.js"></script>
+  <script src="js/systems/fighter.js"></script>
+  <script src="js/systems/ai.js"></script>
+  <script src="js/systems/battle.js"></script>
+  <script src="js/systems/run.js"></script>
+  <script src="js/systems/audio.js"></script>
+  <script src="js/systems/save.js"></script>
+  <!-- presentation -->
+  <script src="js/ui/pixel.js"></script>
+  <script src="js/ui/arena-renderer.js"></script>
+  <script src="js/ui/input.js"></script>
+  <script src="js/ui/components.js"></script>
+  <script src="js/ui/screens.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
