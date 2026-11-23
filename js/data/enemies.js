@@ -208,8 +208,9 @@
 
   // AI presets. Difficulty comes from decision quality + reaction speed, never extra rules.
   EB.AI_LEVELS = [
-    { id: 'easy', name: 'Easy', think: 0.95, step: 0.17, dropWait: 0.35, noise: 2.2, mistake: 0.18, lookahead: false, hold: false, attackBias: 0.2 },
-    { id: 'normal', name: 'Normal', think: 0.85, step: 0.14, dropWait: 0.25, noise: 1.2, mistake: 0.12, lookahead: false, hold: true, attackBias: 0.6 },
-    { id: 'hard', name: 'Hard', think: 0.34, step: 0.065, dropWait: 0.04, noise: 0.08, mistake: 0.0, lookahead: true, hold: true, attackBias: 1.4 },
+    // Retuned: Hard = the old Normal, Normal = the old Easy, Easy = a new, gentler tier.
+    { id: 'easy', name: 'Easy', think: 1.35, step: 0.22, dropWait: 0.5, noise: 3.2, mistake: 0.28, lookahead: false, hold: false, attackBias: 0.0 },
+    { id: 'normal', name: 'Normal', think: 0.95, step: 0.17, dropWait: 0.35, noise: 2.2, mistake: 0.18, lookahead: false, hold: false, attackBias: 0.2 },
+    { id: 'hard', name: 'Hard', think: 0.85, step: 0.14, dropWait: 0.25, noise: 1.2, mistake: 0.12, lookahead: false, hold: true, attackBias: 0.6 },
   ];
 })(globalThis.EB = globalThis.EB || {});
