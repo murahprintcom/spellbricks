@@ -59,5 +59,8 @@ SITE.mkdir(exist_ok=True)
 /site.webmanifest
   Content-Type: application/manifest+json
 ''')
+# public stats page (reads /api/stats from the Worker in src/worker.js)
+(SITE / 'stats').mkdir(exist_ok=True)
+(SITE / 'stats' / 'index.html').write_text((ROOT / 'stats' / 'index.html').read_text())
 (SITE / 'robots.txt').write_text(f'User-agent: *\nAllow: /\n')
 print('site built:', ', '.join(sorted(p.name for p in SITE.iterdir())))

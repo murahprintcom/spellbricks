@@ -2681,10 +2681,10 @@ p { line-height: 1.5; }
   });
 
   const defaults = () => ({
-    settings: Object.assign({ music: 0.5, sfx: 0.7, shake: true, ghost: true, das: 0.14, arr: 0.035, keys: JSON.parse(JSON.stringify(DEFAULT_KEYS)) }, ARENA_DEFAULTS()),
+    settings: Object.assign({ analytics: true, music: 0.5, sfx: 0.7, shake: true, ghost: true, das: 0.14, arr: 0.035, keys: JSON.parse(JSON.stringify(DEFAULT_KEYS)) }, ARENA_DEFAULTS()),
     profile: {
       cards: {}, relics: {}, enemies: {},
-      stats: { runsStarted: 0, runsWon: 0, dungeonsCleared: 0, battlesWon: 0, battlesLost: 0, lines: 0, sent: 0, pieces: 0, bestCombo: 0, bestPPM: 0, reactions: 0, quads: 0, playTime: 0 },
+      stats: { bestScore: 0, runsStarted: 0, runsWon: 0, dungeonsCleared: 0, battlesWon: 0, battlesLost: 0, lines: 0, sent: 0, pieces: 0, bestCombo: 0, bestPPM: 0, reactions: 0, quads: 0, playTime: 0 },
       tutorialSeen: false,
       maxDungeonCleared: 0,   // most bosses beaten in a single run (unlocks heroes)
       heroesAnnounced: [],    // heroes whose unlock was already shown

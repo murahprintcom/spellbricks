@@ -24,6 +24,7 @@
       Game.applyTouch();
       window.addEventListener('resize', () => { if (Game.renderer) { Game.renderer.resize(); Game.placePause(); } });
       document.addEventListener('visibilitychange', () => { if (document.hidden && Game.battle && !Game.paused && Game.battle.state !== 'over') Game.pause(); });
+      EB.Track.open();
       const go = () => EB.UI.title();
       if (document.fonts && document.fonts.load) document.fonts.load('12px "Press Start 2P"').then(go, go); else go();
     },
@@ -157,6 +158,7 @@
       if (Game.ending) return;
       Game.ending = true;
       EB.Save.recordBattle(res);
+      EB.Track.battle(res, Game.cfg);
       EB.Audio.music(null);
       EB.Audio.sfx(res.winner === 'player' ? 'victory' : 'defeat');
       const cb = Game.onEnd;

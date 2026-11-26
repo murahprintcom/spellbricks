@@ -3309,10 +3309,10 @@ p { line-height: 1.5; }
   });
 
   const defaults = () => ({
-    settings: Object.assign({ music: 0.5, sfx: 0.7, shake: true, ghost: true, das: 0.14, arr: 0.035, keys: JSON.parse(JSON.stringify(DEFAULT_KEYS)) }, ARENA_DEFAULTS()),
+    settings: Object.assign({ analytics: true, music: 0.5, sfx: 0.7, shake: true, ghost: true, das: 0.14, arr: 0.035, keys: JSON.parse(JSON.stringify(DEFAULT_KEYS)) }, ARENA_DEFAULTS()),
     profile: {
       cards: {}, relics: {}, enemies: {},
-      stats: { runsStarted: 0, runsWon: 0, dungeonsCleared: 0, battlesWon: 0, battlesLost: 0, lines: 0, sent: 0, pieces: 0, bestCombo: 0, bestPPM: 0, reactions: 0, quads: 0, playTime: 0 },
+      stats: { bestScore: 0, runsStarted: 0, runsWon: 0, dungeonsCleared: 0, battlesWon: 0, battlesLost: 0, lines: 0, sent: 0, pieces: 0, bestCombo: 0, bestPPM: 0, reactions: 0, quads: 0, playTime: 0 },
       tutorialSeen: false,
       maxDungeonCleared: 0,   // most bosses beaten in a single run (unlocks heroes)
       heroesAnnounced: [],    // heroes whose unlock was already shown
@@ -3381,6 +3381,99 @@ p { line-height: 1.5; }
   };
 
   EB.Save = Save;
+})(globalThis.EB = globalThis.EB || {});
+
+</script>
+  <script>/* js/systems/track.js */
+// Anonymous play statistics for the public stats page (spellbricks.gilagames.com/stats/).
+// Sends small JSON events to /api/track on the same site: a random player id kept in
+// localStorage, the device type and game results. No names, emails or IP addresses.
+// Off when the game runs from a file, inside another page, or when the player turns it off
+// in Settings -> Data.
+(function (EB) {
+  'use strict';
+  const PID_KEY = 'spellbricks.pid';
+  const ENDPOINT = '/api/track';
+  const queue = [];
+  let timer = 0, pid = null;
+
+  const enabled = () => {
+    try {
+      if (!/^https?:$/.test(location.protocol) || window.top !== window.self) return false;
+      if (!/(^|\.)gilagames\.com$|\.workers\.dev$|^localhost$|^127\.0\.0\.1$/.test(location.hostname)) return false;
+    } catch (e) { return false; }
+    return !EB.Save || EB.Save.settings.analytics !== false;
+  };
+
+  function playerId() {
+    if (pid) return pid;
+    try { pid = localStorage.getItem(PID_KEY); } catch (e) { /* storage blocked */ }
+    if (!pid || !/^[a-z0-9]{12,40}$/.test(pid)) {
+      const b = new Uint8Array(12);
+      (window.crypto || {}).getRandomValues ? crypto.getRandomValues(b) : b.forEach((_, i) => { b[i] = Math.random() * 256; });
+      pid = Array.from(b, (x) => x.toString(36).padStart(2, '0')).join('').slice(0, 20);
+      try { localStorage.setItem(PID_KEY, pid); } catch (e) { /* this visit still counts */ }
+    }
+    return pid;
+  }
+
+  function flush(beacon) {
+    clearTimeout(timer); timer = 0;
+    if (!queue.length || !enabled()) { queue.length = 0; return; }
+    const body = JSON.stringify({ pid: playerId(), events: queue.splice(0, 25) });
+    try {
+      if (beacon && navigator.sendBeacon) navigator.sendBeacon(ENDPOINT, new Blob([body], { type: 'application/json' }));
+      else fetch(ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true }).catch(() => {});
+    } catch (e) { /* offline: stats are best effort */ }
+    if (queue.length) timer = setTimeout(flush, 1000);
+  }
+
+  function send(type, data) {
+    if (!enabled()) return;
+    queue.push(Object.assign({ type }, data));
+    if (!timer) timer = setTimeout(flush, 1500);
+  }
+
+  // Run score: floors cleared x100 + lines + attack sent, x difficulty (Easy 1, Normal 1.5, Hard 2),
+  // +2000 for finishing all dungeons.
+  function runScore(run, won) {
+    const s = run.stats || {};
+    const floors = EB.Track.floorsCleared(run, won);
+    const mult = [1, 1.5, 2][run.difficulty || 0] || 1;
+    return Math.round((floors * 100 + (s.lines || 0) + (s.sent || 0)) * mult) + (won ? 2000 : 0);
+  }
+
+  EB.Track = {
+    enabled,
+    floorsCleared: (run, won) => (run.dungeon || 0) * ((run.map && run.map.floors.length) || 8) + Math.max(0, (run.floor || 0) + (won ? 1 : 0)),
+    runScore,
+    open() {
+      let touch = false;
+      try { touch = matchMedia('(pointer: coarse)').matches; } catch (e) { /* old browser */ }
+      send('open', { device: touch ? 'touch' : 'desktop' });
+    },
+    runStart(run) { send('run_start', { hero: run.hero || null, diff: run.difficulty }); },
+    battle(res, cfg) {
+      const t = (cfg && cfg.track) || {}, p = res.player;
+      send('battle', {
+        mode: cfg && cfg.mode, win: res.winner === 'player', hero: t.hero || null, diff: t.diff, enemy: t.enemy, tier: t.tier || 'normal',
+        level: t.level, dungeon: t.dungeon, floor: t.floor, dur: res.duration, lines: p.lines, sent: p.sent, combo: p.maxCombo,
+        ppm: res.duration > 0 ? p.pieces / (res.duration / 60) : 0, reactions: p.reactions,
+      });
+    },
+    runEnd(run, won) {
+      send('run_end', {
+        win: won, hero: run.hero || null, diff: run.difficulty, dungeon: (run.dungeon || 0) + 1, floor: EB.Track.floorsCleared(run, won),
+        lines: (run.stats || {}).lines, combo: (run.stats || {}).bestCombo, score: runScore(run, won),
+      });
+      flush();
+    },
+    unlock(hero) { send('unlock', { hero }); },
+    flush,
+  };
+
+  window.addEventListener('pagehide', () => flush(true));
+  document.addEventListener('visibilitychange', () => { if (document.hidden) flush(true); });
 })(globalThis.EB = globalThis.EB || {});
 
 </script>
@@ -4700,6 +4793,7 @@ p { line-height: 1.5; }
           const run = Run().create({ difficulty: diff, hero });
           save().setRun(run);
           save().profile.stats.runsStarted++;
+          EB.Track.runStart(run);
           save().write();
           if (!save().profile.tutorialSeen) UI.howto(UI.map, true); else UI.map();
         },
@@ -4776,6 +4870,7 @@ p { line-height: 1.5; }
         enemy: { name: e.name, cards: EB.enemyDeck(e), relics: e.relics || [], level: lvl, speed: e.tier === 'boss' ? EB.CONFIG.BOSS_SPEED : 1, portrait: { enemy: foe } },
         label: 'QUICK BATTLE', playerSub: EB.PRESET_DECKS[deck].name.toUpperCase() + ' DECK', enemySub: EB.AI_LEVELS[lvl].name.toUpperCase() + ' AI',
         music: e.tier === 'boss' ? 'boss' : 'battle',
+        track: { enemy: foe, tier: e.tier, level: lvl, hero: hero || null },
       };
       save().profile.enemies[foe] = true;
       EB.Game.startBattle(cfg, (res) => UI.result(res, { quick: true, rematch: () => UI.startQuick(lvl, deck, foe, hero) }));
@@ -4914,6 +5009,7 @@ p { line-height: 1.5; }
         playerSub: `HP ${run.hp}/${run.maxHp}`,
         enemySub: `${en.tier.toUpperCase()} · ${EB.AI_LEVELS[en.level].name.toUpperCase()}`,
         music: en.tier === 'boss' ? 'boss' : 'battle',
+        track: { enemy: en.id, tier: en.tier, level: en.level, hero: run.hero || null, diff: run.difficulty, dungeon: (run.dungeon || 0) + 1, floor: node.floor + 1 },
       };
       EB.Game.startBattle(cfg, (res) => {
         const out = Run().afterBattle(run, res, en.tier);
@@ -5240,6 +5336,7 @@ p { line-height: 1.5; }
       const fresh = EB.unlockedHeroes(pr).filter((id) => EB.HEROES[id].unlock && !pr.heroesAnnounced.includes(id));
       if (!fresh.length) return;
       pr.heroesAnnounced.push(...fresh);
+      fresh.forEach((h) => EB.Track.unlock(h));
       save().write();
       EB.Audio.sfx('victory');
       const b = modal.open(`<div class="result-title win" style="font-size:22px">HERO UNLOCKED!</div>
@@ -5255,7 +5352,7 @@ p { line-height: 1.5; }
       const run = save().run;
       if (!run) return UI.title();
       const st = save().profile.stats;
-      if (!run.recorded) { run.recorded = true; if (won) st.runsWon++; save().write(); }
+      if (!run.recorded) { run.recorded = true; if (won) st.runsWon++; if (!run.score) run.score = EB.Track.runScore(run, won); if (run.score > (st.bestScore || 0)) st.bestScore = run.score; save().write(); EB.Track.runEnd(run, won); }
       setTimeout(() => UI.announceUnlocks(), 300);
       EB.Audio.music(won ? 'victory' : null);
       if (!won) EB.Audio.sfx('defeat');
@@ -5264,6 +5361,7 @@ p { line-height: 1.5; }
         <div class="result-title ${won ? 'win' : 'lose'}">${won ? 'RUN COMPLETE!' : 'RUN OVER'}</div>
         <p class="small dim">${won ? `The ${esc(EB.ENEMIES[EB.DUNGEONS[EB.DUNGEONS.length - 1].pools.boss[0]].name)} falls and the eclipse breaks. All ${EB.DUNGEONS.length} dungeons are cleared.` : `Your stack crumbles in ${esc(EB.dungeonOf(run).name)}. The elements will wait for your return.`}</p>
         <div class="panel" style="text-align:left"><div class="statgrid" style="grid-template-columns:1fr auto">
+          <span class="small">Score</span><span class="you">${run.score || 0}${run.score && run.score >= (st.bestScore || 0) ? ' · BEST!' : ''}</span>
           <span class="small">Dungeon reached</span><span class="you">${(run.dungeon || 0) + 1} / ${EB.DUNGEONS.length} · ${esc(EB.dungeonOf(run).name)}</span>
           <span class="small">Floors cleared</span><span class="you">${(run.dungeon || 0) * run.map.floors.length + Math.max(0, run.floor + (won ? 1 : 0))} / ${EB.DUNGEONS.length * run.map.floors.length}</span>
           <span class="small">Battles won / lost</span><span class="you">${s.battlesWon} / ${s.battlesLost}</span>
@@ -5356,7 +5454,7 @@ p { line-height: 1.5; }
     stats() {
       const s = save().profile.stats;
       const rows = [
-        ['Runs started', s.runsStarted], ['Runs won', s.runsWon], ['Dungeons cleared', s.dungeonsCleared || 0], ['Battles won', s.battlesWon], ['Battles lost', s.battlesLost],
+        ['Best run score', s.bestScore || 0], ['Runs started', s.runsStarted], ['Runs won', s.runsWon], ['Dungeons cleared', s.dungeonsCleared || 0], ['Battles won', s.battlesWon], ['Battles lost', s.battlesLost],
         ['Lines cleared', s.lines], ['Attack lines sent', s.sent], ['4-line clears', s.quads], ['Pieces placed', s.pieces],
         ['Best combo', s.bestCombo], ['Best pieces/min', s.bestPPM], ['Elemental reactions', s.reactions], ['Battle time', EB.util.fmtTime(s.playTime)],
       ];
@@ -5402,6 +5500,7 @@ p { line-height: 1.5; }
           </div>
           <div class="panel">
             <h3>Data</h3>
+            <div class="set-row"><span>Share anonymous play stats <span class="dim tiny">(no name or email; shown at /stats)</span></span><button class="btn sm" data-act="tog" data-arg="analytics">${st.analytics !== false ? 'ON' : 'OFF'}</button></div>
             <div class="set-row"><span>Delete all progress (collection, stats, run)</span><button class="btn sm" data-act="wipe">Delete</button></div>
           </div>
         </div>`, {
@@ -5542,6 +5641,7 @@ p { line-height: 1.5; }
       Game.applyTouch();
       window.addEventListener('resize', () => { if (Game.renderer) { Game.renderer.resize(); Game.placePause(); } });
       document.addEventListener('visibilitychange', () => { if (document.hidden && Game.battle && !Game.paused && Game.battle.state !== 'over') Game.pause(); });
+      EB.Track.open();
       const go = () => EB.UI.title();
       if (document.fonts && document.fonts.load) document.fonts.load('12px "Press Start 2P"').then(go, go); else go();
     },
@@ -5675,6 +5775,7 @@ p { line-height: 1.5; }
       if (Game.ending) return;
       Game.ending = true;
       EB.Save.recordBattle(res);
+      EB.Track.battle(res, Game.cfg);
       EB.Audio.music(null);
       EB.Audio.sfx(res.winner === 'player' ? 'victory' : 'defeat');
       const cb = Game.onEnd;

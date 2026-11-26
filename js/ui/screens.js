@@ -95,6 +95,7 @@
           const run = Run().create({ difficulty: diff, hero });
           save().setRun(run);
           save().profile.stats.runsStarted++;
+          EB.Track.runStart(run);
           save().write();
           if (!save().profile.tutorialSeen) UI.howto(UI.map, true); else UI.map();
         },
@@ -171,6 +172,7 @@
         enemy: { name: e.name, cards: EB.enemyDeck(e), relics: e.relics || [], level: lvl, speed: e.tier === 'boss' ? EB.CONFIG.BOSS_SPEED : 1, portrait: { enemy: foe } },
         label: 'QUICK BATTLE', playerSub: EB.PRESET_DECKS[deck].name.toUpperCase() + ' DECK', enemySub: EB.AI_LEVELS[lvl].name.toUpperCase() + ' AI',
         music: e.tier === 'boss' ? 'boss' : 'battle',
+        track: { enemy: foe, tier: e.tier, level: lvl, hero: hero || null },
       };
       save().profile.enemies[foe] = true;
       EB.Game.startBattle(cfg, (res) => UI.result(res, { quick: true, rematch: () => UI.startQuick(lvl, deck, foe, hero) }));
@@ -309,6 +311,7 @@
         playerSub: `HP ${run.hp}/${run.maxHp}`,
         enemySub: `${en.tier.toUpperCase()} · ${EB.AI_LEVELS[en.level].name.toUpperCase()}`,
         music: en.tier === 'boss' ? 'boss' : 'battle',
+        track: { enemy: en.id, tier: en.tier, level: en.level, hero: run.hero || null, diff: run.difficulty, dungeon: (run.dungeon || 0) + 1, floor: node.floor + 1 },
       };
       EB.Game.startBattle(cfg, (res) => {
         const out = Run().afterBattle(run, res, en.tier);
@@ -635,6 +638,7 @@
       const fresh = EB.unlockedHeroes(pr).filter((id) => EB.HEROES[id].unlock && !pr.heroesAnnounced.includes(id));
       if (!fresh.length) return;
       pr.heroesAnnounced.push(...fresh);
+      fresh.forEach((h) => EB.Track.unlock(h));
       save().write();
       EB.Audio.sfx('victory');
       const b = modal.open(`<div class="result-title win" style="font-size:22px">HERO UNLOCKED!</div>
@@ -650,7 +654,7 @@
       const run = save().run;
       if (!run) return UI.title();
       const st = save().profile.stats;
-      if (!run.recorded) { run.recorded = true; if (won) st.runsWon++; save().write(); }
+      if (!run.recorded) { run.recorded = true; if (won) st.runsWon++; if (!run.score) run.score = EB.Track.runScore(run, won); if (run.score > (st.bestScore || 0)) st.bestScore = run.score; save().write(); EB.Track.runEnd(run, won); }
       setTimeout(() => UI.announceUnlocks(), 300);
       EB.Audio.music(won ? 'victory' : null);
       if (!won) EB.Audio.sfx('defeat');
@@ -659,6 +663,7 @@
         <div class="result-title ${won ? 'win' : 'lose'}">${won ? 'RUN COMPLETE!' : 'RUN OVER'}</div>
         <p class="small dim">${won ? `The ${esc(EB.ENEMIES[EB.DUNGEONS[EB.DUNGEONS.length - 1].pools.boss[0]].name)} falls and the eclipse breaks. All ${EB.DUNGEONS.length} dungeons are cleared.` : `Your stack crumbles in ${esc(EB.dungeonOf(run).name)}. The elements will wait for your return.`}</p>
         <div class="panel" style="text-align:left"><div class="statgrid" style="grid-template-columns:1fr auto">
+          <span class="small">Score</span><span class="you">${run.score || 0}${run.score && run.score >= (st.bestScore || 0) ? ' · BEST!' : ''}</span>
           <span class="small">Dungeon reached</span><span class="you">${(run.dungeon || 0) + 1} / ${EB.DUNGEONS.length} · ${esc(EB.dungeonOf(run).name)}</span>
           <span class="small">Floors cleared</span><span class="you">${(run.dungeon || 0) * run.map.floors.length + Math.max(0, run.floor + (won ? 1 : 0))} / ${EB.DUNGEONS.length * run.map.floors.length}</span>
           <span class="small">Battles won / lost</span><span class="you">${s.battlesWon} / ${s.battlesLost}</span>
@@ -751,7 +756,7 @@
     stats() {
       const s = save().profile.stats;
       const rows = [
-        ['Runs started', s.runsStarted], ['Runs won', s.runsWon], ['Dungeons cleared', s.dungeonsCleared || 0], ['Battles won', s.battlesWon], ['Battles lost', s.battlesLost],
+        ['Best run score', s.bestScore || 0], ['Runs started', s.runsStarted], ['Runs won', s.runsWon], ['Dungeons cleared', s.dungeonsCleared || 0], ['Battles won', s.battlesWon], ['Battles lost', s.battlesLost],
         ['Lines cleared', s.lines], ['Attack lines sent', s.sent], ['4-line clears', s.quads], ['Pieces placed', s.pieces],
         ['Best combo', s.bestCombo], ['Best pieces/min', s.bestPPM], ['Elemental reactions', s.reactions], ['Battle time', EB.util.fmtTime(s.playTime)],
       ];
@@ -797,6 +802,7 @@
           </div>
           <div class="panel">
             <h3>Data</h3>
+            <div class="set-row"><span>Share anonymous play stats <span class="dim tiny">(no name or email; shown at /stats)</span></span><button class="btn sm" data-act="tog" data-arg="analytics">${st.analytics !== false ? 'ON' : 'OFF'}</button></div>
             <div class="set-row"><span>Delete all progress (collection, stats, run)</span><button class="btn sm" data-act="wipe">Delete</button></div>
           </div>
         </div>`, {

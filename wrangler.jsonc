@@ -1,10 +1,19 @@
-// Cloudflare Workers (static assets) project "spellbricks" -> https://spellbricks.gilagames.com
+// Cloudflare Worker "spellbricks" -> https://spellbricks.gilagames.com
+// Serves the game from site/ and the anonymous play stats API (/api/*) from src/worker.js.
+// Stats live in one SQLite Durable Object (StatsDO); nothing to set up in the dashboard.
 // No build step: run `python3 tools/build_site.py` and commit site/. Cloudflare runs `npx wrangler deploy`.
 {
   "name": "spellbricks",
+  "main": "src/worker.js",
   "compatibility_date": "2026-11-01",
   "assets": {
     "directory": "./site",
-    "not_found_handling": "single-page-application"
-  }
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "STATS", "class_name": "StatsDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StatsDO"] }],
+  "observability": { "enabled": true }
 }
