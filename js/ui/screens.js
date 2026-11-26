@@ -34,6 +34,7 @@
           <button class="btn primary" data-act="play">${ico('sword', 32)} New Run</button>
           <button class="btn" data-act="cont" ${run && run.status === 'map' ? '' : 'disabled'}>${ico('campfire', 32)} Continue Run${run && run.status === 'map' ? ` <span class="tiny dim">D${(run.dungeon || 0) + 1} F${Math.max(1, run.floor + 1)}</span>` : ''}</button>
           <button class="btn" data-act="quick">${ico('lightning', 32)} Quick Battle</button>
+          <button class="btn" data-act="friend">${ico('sword', 32)} Play a Friend</button>
           <div class="row" style="gap:0">
             <button class="btn sm grow" data-act="deck">${ico('deck', 32)} Deck</button>
             <button class="btn sm grow" data-act="cards">${ico('card', 32)} Cards</button>
@@ -58,6 +59,7 @@
         },
         cont() { UI.map(); },
         quick: () => UI.quick(),
+        friend: () => UI.friend(),
         deck: () => UI.deck(UI.title),
         cards: () => UI.collection(),
         relics: () => UI.relicCollection(),
@@ -345,7 +347,16 @@
       ];
       let runInfo = '', actions = '';
       const h = {};
-      if (ctx.quick) {
+      if (ctx.pvp) {
+        actions = `<button class="btn" data-act="leave">Leave room</button><button class="btn primary" data-act="again" ${EB.Net.ws ? '' : 'disabled'}>Rematch</button>`;
+        h.leave = () => { EB.Net.leave(); UI.title(); };
+        h.again = () => {
+          EB.Net.ready(true);
+          const b = modal.open(`<h2 style="text-align:center">Rematch</h2><p class="small" style="text-align:center">Waiting for your friend to press Rematch…</p>
+            <div class="row center mt"><button class="btn" data-act="cancel">Cancel</button></div>`, true);
+          bind(b.parentElement, { cancel: () => { EB.Net.ready(false); modal.close(); } });
+        };
+      } else if (ctx.quick) {
         actions = `<button class="btn" data-act="menu">Menu</button><button class="btn" data-act="setup">Change Setup</button><button class="btn primary" data-act="again">Rematch</button>`;
         h.menu = UI.title; h.setup = UI.quick; h.again = ctx.rematch;
       } else {
@@ -372,11 +383,111 @@
         <div class="result-title ${win ? 'win' : 'lose'}">${win ? 'VICTORY!' : draw ? 'DRAW' : 'DEFEAT'}</div>
         <p class="center small dim" style="text-align:center">${esc(res.reason)}</p>
         <div class="panel"><div class="statgrid">
-          <span class="h"></span><span class="h you">YOU</span><span class="h foe">FOE</span>
+          <span class="h"></span><span class="h you">YOU</span><span class="h foe">${ctx.pvp ? 'FRIEND' : 'FOE'}</span>
           ${rows.map(([k, x, y]) => `<span class="small">${k}</span><span class="you">${x}</span><span class="foe">${y}</span>`).join('')}
         </div>${runInfo}</div>
         <div class="row center">${actions}</div>
       </div>`, h);
+    },
+
+    // ================= PLAY A FRIEND (two phones, one room code) =================
+    friend(code) {
+      const N = EB.Net, st = save().settings;
+      let hero = EB.HEROES[st.friendHero] ? st.friendHero : (st.lastHero && EB.HEROES[st.lastHero] ? st.lastHero : 'ignis');
+      let join = N.cleanCode(code || '');
+      if (!N.available()) {
+        return UI.show(`<div class="wrap"><div class="row spread"><h2>Play a Friend</h2><button class="btn sm" data-act="back">Back</button></div>
+          <div class="panel"><p class="small">Playing with a friend needs the website version. Open <b>spellbricks.gilagames.com</b> on both phones.</p></div></div>`, { back: UI.title });
+      }
+      const render = () => {
+        UI.show(`<div class="wrap">
+          <div class="row spread"><h2>Play a Friend</h2><button class="btn sm" data-act="back">Back</button></div>
+          <p class="small dim">Battle a friend on their own phone. One of you creates a room and shares the code; the other joins with it. Every hero is open here.</p>
+          <h3>Your hero</h3>
+          <div class="row mb">${EB.HERO_IDS.map((id) => `<button class="btn sm ${id === hero ? 'sel' : ''}" data-act="hero" data-arg="${id}"><img class="foe-ico" src="${EB.Pix.portraitURL({ hero: id }, 2)}" alt="">${esc(EB.HEROES[id].name)}</button>`).join('')}</div>
+          <p class="tiny dim mb">${esc(EB.HEROES[hero].title)} · ${esc(EB.HEROES[hero].passive.name)}: ${esc(EB.HEROES[hero].passive.desc)} · Skill ${esc(EB.HEROES[hero].skill.name)}: ${esc(EB.HEROES[hero].skill.desc)}</p>
+          <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+            <div class="panel"><h3>Create a room</h3><p class="small">You get a 4-letter code to send to your friend.</p>
+              <button class="btn primary wide" data-act="create">${ico('sword', 32)} Create room</button></div>
+            <div class="panel"><h3>Join a room</h3><p class="small">Type the code your friend sent you.</p>
+              <div class="row"><input id="roomCode" class="code-input" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD" value="${esc(join)}" aria-label="Room code">
+              <button class="btn primary" data-act="join">Join</button></div></div>
+          </div>
+        </div>`, {
+          back: UI.title,
+          hero(a) { if (EB.HEROES[a]) { hero = a; st.friendHero = a; save().write(); join = N.cleanCode((document.getElementById('roomCode') || {}).value); render(); } },
+          create() { UI.lobby(N.newCode(), hero); },
+          join() {
+            const c = N.cleanCode(document.getElementById('roomCode').value);
+            if (c.length !== 4) { toast('Room codes have 4 letters'); return; }
+            UI.lobby(c, hero);
+          },
+        });
+        const inp = document.getElementById('roomCode');
+        inp.oninput = () => { inp.value = N.cleanCode(inp.value); };
+        inp.onkeydown = (e) => { if (e.key === 'Enter') document.querySelector('[data-act="join"]').click(); };
+      };
+      render();
+      if (join.length === 4) UI.lobby(join, hero);
+    },
+
+    lobby(code, hero) {
+      const N = EB.Net, st = save().settings;
+      const g = EB.ArenaRenderer.gridFor(window.innerWidth, window.innerHeight, st.cols || 15);
+      let note = 'Connecting…', state = 'wait', onLobby = true;
+      const view = () => {
+        if (EB.Game.battle || !onLobby) return; // during a match / on the result screen the lobby stays hidden
+        const me = N.players.find((p) => p.slot === N.you), friend = N.players.find((p) => p.slot !== N.you);
+        const who = (p) => `<div class="item"><img src="${EB.Pix.portraitURL({ hero: p.hero || 'ignis' }, 3)}" alt="" style="width:40px;height:49px"><div class="grow"><div class="t">${p.slot === N.you ? 'You' : 'Friend'} · ${esc((EB.HEROES[p.hero] || {}).name || '')}</div></div></div>`;
+        UI.show(`<div class="wrap" style="text-align:center">
+          <div class="row spread"><h2>Room</h2><button class="btn sm" data-act="leave">Leave</button></div>
+          <p class="small dim">Room code</p>
+          <div class="room-code">${esc(code)}</div>
+          <div class="row center mb"><button class="btn sm" data-act="share">Share link</button><button class="btn sm" data-act="copy">Copy code</button></div>
+          <div class="panel" style="text-align:left"><div class="list">${me ? who(me) : ''}${friend ? who(friend) : `<div class="item"><span class="spin" aria-hidden="true"></span><div class="grow"><div class="t dim">Waiting for your friend…</div><div class="d">Send them the code or the link. They open the game, tap Play a Friend and join.</div></div></div>`}</div></div>
+          <p class="small ${state === 'err' ? 'lose' : 'dim'}">${esc(note)}</p>
+          ${state === 'err' ? '<button class="btn primary" data-act="retry">Try again</button>' : ''}
+        </div>`, {
+          leave() { N.leave(); UI.friend(); },
+          retry() { connect(); },
+          copy() { try { navigator.clipboard.writeText(code).then(() => toast('Code copied'), () => toast(code)); } catch (e) { toast(code); } },
+          share() {
+            const url = N.link(code), text = `Battle me in Spellbricks! Room code ${code}`;
+            if (navigator.share) navigator.share({ title: 'Spellbricks', text, url }).catch(() => {});
+            else { try { navigator.clipboard.writeText(url).then(() => toast('Link copied'), () => toast(url)); } catch (e) { toast(url); } }
+          },
+        });
+      };
+      const connect = () => {
+        note = 'Connecting…'; state = 'wait'; view();
+        N.connect(code, { hero, cols: st.cols || 15, rows: g.rows, garbage: st.garbageMode === 'classic' ? 'classic' : 'direct' }, {
+          room(players) { note = players.length < 2 ? 'Room is open.' : 'Friend found! Starting…'; state = 'ok'; view(); },
+          start(msg) { onLobby = false; UI.startFriend(msg, hero, code); },
+          full() { note = 'This room already has two players. Check the code or create a new room.'; state = 'err'; view(); },
+          left() { if (!EB.Game.battle) { note = 'Your friend left the room. Waiting for them to come back…'; modal.close(); onLobby = true; view(); } },
+          closed(msg) { if (EB.Game.battle) return; note = msg || 'Connection lost.'; state = 'err'; modal.close(); onLobby = true; view(); },
+        });
+      };
+      UI.lobbyView = view;
+      connect();
+    },
+
+    startFriend(msg, hero, code) {
+      modal.close();
+      const foe = msg.foe || {}, fh = EB.HEROES[foe.hero] ? foe.hero : 'ignis';
+      const deck = (id) => EB.HEROES[id].deck.map((c) => EB.makeCard(c));
+      const match = EB.Net.makeMatch();
+      const cfg = {
+        mode: 'pvp', online: match, grid: { cols: msg.cols, rows: msg.rows }, garbage: msg.garbage, seed: (msg.seed + EB.Net.you * 7919) >>> 0,
+        player: { name: EB.HEROES[hero].name, hero, cards: deck(hero), relics: [], portrait: { hero } },
+        enemy: { name: EB.HEROES[fh].name, hero: fh, cards: deck(fh), relics: [], level: 0, portrait: { hero: fh } },
+        label: 'VS FRIEND', playerSub: 'ROOM ' + code, enemySub: 'FRIEND',
+        music: 'battle', track: { hero, enemy: fh, tier: 'normal' },
+      };
+      EB.Game.startBattle(cfg, (res) => {
+        EB.Net.match = null;
+        UI.result(res, { pvp: true });
+      });
     },
 
     // ================= REWARDS =================

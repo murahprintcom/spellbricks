@@ -123,6 +123,7 @@
       ${tile('Bosses beaten', n(t.bossesBeaten), `${n(t.battles)} battles · ${winRate} won`)}
       ${tile('Lines cleared', n(t.lines), `${n(t.sessions)} game sessions`)}
       ${tile('Time in battle', dur(t.playSeconds), 'all players together')}
+      ${tile('Friend battles', n(Math.round((t.pvpBattles || 0) / 2)), 'Play a Friend matches')}
     </div>`;
     html += panel('Players per day (last 30 days)', days.length ? daily(days) : empty());
 

@@ -1,5 +1,5 @@
 // Cloudflare Worker "spellbricks" -> https://spellbricks.gilagames.com
-// Serves the game from site/ and the anonymous play stats API (/api/*) from src/worker.js.
+// Serves the game from site/, the anonymous play stats API and the Play a Friend rooms (/api/*) from src/worker.js.
 // Stats live in one SQLite Durable Object (StatsDO); nothing to set up in the dashboard.
 // No build step: run `python3 tools/build_site.py` and commit site/. Cloudflare runs `npx wrangler deploy`.
 {
@@ -12,8 +12,8 @@
     "run_worker_first": ["/api/*"]
   },
   "durable_objects": {
-    "bindings": [{ "name": "STATS", "class_name": "StatsDO" }]
+    "bindings": [{ "name": "STATS", "class_name": "StatsDO" }, { "name": "ROOMS", "class_name": "RoomDO" }]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StatsDO"] }],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StatsDO"] }, { "tag": "v2", "new_sqlite_classes": ["RoomDO"] }],
   "observability": { "enabled": true }
 }

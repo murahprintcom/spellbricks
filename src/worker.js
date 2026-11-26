@@ -39,6 +39,11 @@ export default {
       ctx.waitUntil(cache.put(key, res.clone()));
       return res;
     }
+    const room = url.pathname.match(/^\/api\/room\/([A-Z2-9]{4})$/);
+    if (room) {
+      if (request.headers.get('Upgrade') !== 'websocket') return json({ error: 'websocket only' }, { status: 426 });
+      return env.ROOMS.get(env.ROOMS.idFromName(room[1])).fetch(request);
+    }
     if (url.pathname.startsWith('/api/')) return json({ error: 'not found' }, { status: 404 });
     return env.ASSETS.fetch(request);
   },
@@ -55,7 +60,7 @@ function clean(e) {
   if (!e || !TYPES.has(e.type)) return null;
   return {
     type: e.type,
-    mode: e.mode === 'run' || e.mode === 'quick' ? e.mode : null,
+    mode: e.mode === 'run' || e.mode === 'quick' || e.mode === 'pvp' ? e.mode : null,
     win: bool(e.win),
     hero: id(e.hero),
     diff: int(e.diff, 0, 2),
@@ -130,6 +135,7 @@ export class StatsDO extends DurableObject {
         SUM(type='battle') AS battles,
         SUM(type='battle' AND win=1) AS battlesWon,
         SUM(type='battle' AND tier='boss' AND win=1) AS bossesBeaten,
+        SUM(type='battle' AND mode='pvp') AS pvpBattles,
         SUM(CASE WHEN type='battle' THEN lines ELSE 0 END) AS lines,
         SUM(CASE WHEN type='battle' THEN dur ELSE 0 END) AS playSeconds
         FROM events`),
@@ -188,4 +194,76 @@ export class StatsDO extends DurableObject {
 
     return { generated: now, totals, daily, heroes, bosses, deadliest, reached, difficulty, quick, topRuns, records, countries, devices };
   }
+}
+
+// ---------- Play a Friend: one Durable Object per 4-letter room code ----------
+// Each phone runs its own board; the room only relays messages between the two players
+// (attacks, effects, board snapshots, events) and starts / restarts matches.
+// Uses the WebSocket Hibernation API, so an idle room costs nothing.
+const RELAY = new Set(['atk', 'fx', 'st', 'ev', 'dead']);
+
+export class RoomDO extends DurableObject {
+  async fetch(request) {
+    const socks = this.ctx.getWebSockets();
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    if (socks.length >= 2) {
+      this.ctx.acceptWebSocket(server);
+      server.send(JSON.stringify({ t: 'full' }));
+      server.close(4000, 'room full');
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    const used = socks.map((w) => (w.deserializeAttachment() || {}).slot);
+    const slot = used.includes(0) ? 1 : 0;
+    this.ctx.acceptWebSocket(server);
+    server.serializeAttachment({ slot, hello: null, ready: false });
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  others(ws) { return this.ctx.getWebSockets().filter((w) => w !== ws && w.readyState === 1); }
+  info(ws) { return ws.deserializeAttachment() || {}; }
+  send(ws, m) { try { ws.send(JSON.stringify(m)); } catch (e) { /* closed */ } }
+
+  lobby() {
+    const all = this.ctx.getWebSockets().filter((w) => w.readyState === 1);
+    const players = all.map((w) => { const a = this.info(w); return { slot: a.slot, hero: a.hello && a.hello.hero, name: a.hello && a.hello.name, ready: a.ready }; });
+    for (const w of all) this.send(w, { t: 'room', you: this.info(w).slot, players });
+    // both players said hello and are ready: start a match
+    if (all.length === 2 && all.every((w) => { const a = this.info(w); return a.hello && a.ready; })) {
+      const hs = all.map((w) => this.info(w).hello);
+      const host = all.find((w) => this.info(w).slot === 0) || all[0];
+      const hh = this.info(host).hello;
+      const cols = hh.cols, rows = Math.min(...hs.map((h) => h.rows));
+      const seed = Math.floor(Math.random() * 1e9);
+      for (const w of all) {
+        const a = this.info(w); a.ready = false; w.serializeAttachment(a);
+        const foe = this.info(all.find((x) => x !== w)).hello;
+        this.send(w, { t: 'start', seed, cols, rows, garbage: hh.garbage, foe });
+      }
+    }
+  }
+
+  async webSocketMessage(ws, raw) {
+    if (typeof raw !== 'string' || raw.length > 20000) return;
+    let m; try { m = JSON.parse(raw); } catch { return; }
+    if (!m || typeof m.t !== 'string') return;
+    if (RELAY.has(m.t)) { for (const o of this.others(ws)) o.send(raw); return; }
+    const a = this.info(ws);
+    if (m.t === 'hello') {
+      const hero = typeof m.hero === 'string' && /^[a-z]{1,16}$/.test(m.hero) ? m.hero : 'ignis';
+      const name = typeof m.name === 'string' ? m.name.replace(/[^\p{L}\p{N} _.-]/gu, '').slice(0, 14) : '';
+      a.hello = { hero, name, cols: Math.min(30, Math.max(8, m.cols | 0)), rows: Math.min(60, Math.max(12, m.rows | 0)), garbage: m.garbage === 'classic' ? 'classic' : 'direct' };
+      a.ready = true;
+      ws.serializeAttachment(a); this.lobby();
+    } else if (m.t === 'ready') {
+      a.ready = !!m.on; ws.serializeAttachment(a); this.lobby();
+    } else if (m.t === 'ping') this.send(ws, { t: 'pong', id: m.id });
+  }
+
+  async webSocketClose(ws) {
+    for (const o of this.others(ws)) this.send(o, { t: 'left' });
+    try { ws.close(1000, 'bye'); } catch (e) { /* already closed */ }
+    this.lobby();
+  }
+  async webSocketError(ws) { await this.webSocketClose(ws); }
 }

@@ -443,6 +443,15 @@ p { line-height: 1.5; }
 .logo-art canvas { width: min(88vw, 520px); height: auto; display: block; margin: 0 auto; image-rendering: auto; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
+/* ---------- Play a Friend ---------- */
+.room-code { font-size: 40px; letter-spacing: 10px; color: var(--gold); text-shadow: 3px 3px 0 #000; margin: 8px 0 14px; }
+.code-input { font-family: 'Press Start 2P', monospace; font-size: 18px; letter-spacing: 6px; text-transform: uppercase; width: 7.5em; padding: 10px 8px;
+  background: var(--bg); color: var(--gold); border: 3px solid var(--edgeL); border-radius: 6px; text-align: center; user-select: text; -webkit-user-select: text; }
+.code-input:focus { outline: none; border-color: var(--gold); }
+.spin { width: 28px; height: 28px; border: 4px solid var(--edgeL); border-top-color: var(--gold); border-radius: 50%; animation: spin 1s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
 </style>
 </head>
 <body>
@@ -1585,7 +1594,7 @@ p { line-height: 1.5; }
         desc: "The foe's blocks fall twice as fast for 6 seconds.",
         use(f) {
           const o = f.opp;
-          o.hastedUntil = f.battle.time + 6;
+          f.battle.affect(o, 'haste', 6);
           o.popup('HASTED!', '#ffe14a', true);
           f.battle.emit('shake', { side: o.side, power: 4 });
         },
@@ -2194,7 +2203,7 @@ p { line-height: 1.5; }
         energy(el, n) { EB.Elemental.add(f, el, n); },
         comboAdd(n) { f.combo += n; ctx.combo = f.combo; },
         guardCombo() { f.comboGuard = true; },
-        fogOpponent(s) { const o = f.opp; if (o) { o.fogUntil = f.battle.time + s; f.battle.emit('fog', { side: o.side }); } },
+        fogOpponent(s) { const o = f.opp; if (o) f.battle.affect(o, 'fog', s); },
         charge(s) { f.chargedUntil = f.battle.time + s; f.popup('CHARGED', '#ffe14a'); },
         shake(p) { f.battle.emit('shake', { side: f.opp ? f.opp.side : f.side, power: p }); },
         storeBonus(n, max) { f.storedBonus = Math.min(max, f.storedBonus + n); },
@@ -2648,7 +2657,11 @@ p { line-height: 1.5; }
       this.projectiles = [];
       this.result = null;
       this.player = new EB.Fighter(this, Object.assign({ side: 'top', seed: this.rng.int(1e9) }, o.player));
-      this.ai = new EB.Fighter(this, Object.assign({ side: 'bottom', seed: this.rng.int(1e9), isAI: true }, o.enemy));
+      this.ai = new EB.Fighter(this, Object.assign({ side: 'bottom', seed: this.rng.int(1e9), isAI: !o.online }, o.enemy));
+      // Play a Friend: the bottom board is a puppet drawn from the friend's snapshots (EB.Net);
+      // attacks, effects and events go over the network instead of into it.
+      this.online = o.online || null;
+      if (this.online) { this.ai.remote = true; return; }
       const lvl = EB.AI_LEVELS[EB.util.clamp(o.enemy.level || 0, 0, EB.AI_LEVELS.length - 1)];
       this.aiCtrl = new EB.AIController(this.ai, lvl, o.enemy.speed || 1);
       // optional: let the AI also drive the player (used by automated tests / attract mode)
@@ -2658,6 +2671,7 @@ p { line-height: 1.5; }
     on(fn) { this.listeners.push(fn); }
     emit(type, data) {
       for (const fn of this.listeners) fn(type, data || {});
+      if (this.online && data && data.side === 'top' && !data.remote) this.online.event(type, data);
       if (type === 'clear' && this.state === 'sudden') {
         this.end(data.side === 'top' ? 'player' : 'ai', 'Sudden death: first line clear');
       }
@@ -2683,6 +2697,24 @@ p { line-height: 1.5; }
         row: fromRows[Math.floor(fromRows.length / 2)],
       });
       this.emit('attack', { side: from.side, lines, el });
+      if (this.online && from === this.player) this.online.send({ t: 'atk', lines, el, row: this.projectiles[this.projectiles.length - 1].row });
+    }
+
+    // an attack the friend sent: it flies across, then lands on our board
+    remoteAttack(lines, el, row) {
+      if (this.state === 'over') return;
+      lines = Math.max(0, Math.min(20, lines | 0));
+      if (!lines) return;
+      this.ai.stats.sent += lines;
+      this.projectiles.push({ from: 'bottom', to: 'top', lines, el, t: 0, dur: C().PROJECTILE_TIME, row: row == null ? C().ROWS - 1 : row });
+      this.emit('attack', { side: 'bottom', lines, el, remote: true });
+    }
+
+    // effects that land on the other fighter (fog, haste): sent over the network in Play a Friend
+    affect(target, kind, secs) {
+      if (this.online && target === this.ai) { this.online.send({ t: 'fx', kind, secs }); return; }
+      if (kind === 'fog') { target.fogUntil = this.time + secs; this.emit('fog', { side: target.side, remote: true }); }
+      if (kind === 'haste') target.hastedUntil = this.time + secs;
     }
 
     update(dt) {
@@ -2704,8 +2736,7 @@ p { line-height: 1.5; }
       this.time += dt;
       this.timeLeft -= dt;
       this.player.update(dt);
-      this.ai.update(dt);
-      this.aiCtrl.update(dt);
+      if (!this.online) { this.ai.update(dt); this.aiCtrl.update(dt); }
       if (this.playerCtrl) this.playerCtrl.update(dt);
 
       for (let i = this.projectiles.length - 1; i >= 0; i--) {
@@ -2714,6 +2745,7 @@ p { line-height: 1.5; }
         if (p.t >= p.dur) {
           this.projectiles.splice(i, 1);
           const target = this.fighter(p.to);
+          if (target.remote) { this.emit('hit', { side: p.to, lines: p.lines, el: p.el }); continue; } // the friend's phone applies it
           target.receive(p.lines, p.el);
           // direct mode: garbage lands the moment the attack arrives (no queue, no counter)
           if (C().GARBAGE_MODE === 'direct') { let guard = 10; while (target.incoming.length && !target.dead && guard--) target.applyGarbage(true); }
@@ -2724,7 +2756,7 @@ p { line-height: 1.5; }
       const pd = this.player.dead, ad = this.ai.dead;
       if (pd || ad) {
         if (pd && ad) this.end('draw', 'Both stacks overflowed');
-        else this.end(pd ? 'ai' : 'player', (pd ? 'Your' : 'Enemy') + ' stack reached the danger line');
+        else this.end(pd ? 'ai' : 'player', (pd ? 'Your' : this.online ? "Your friend's" : 'Enemy') + ' stack reached the danger line');
         return;
       }
       if (this.timeLeft <= 0) this.timeUp();
@@ -3492,6 +3524,162 @@ p { line-height: 1.5; }
 
   window.addEventListener('pagehide', () => flush(true));
   document.addEventListener('visibilitychange', () => { if (document.hidden) flush(true); });
+})(globalThis.EB = globalThis.EB || {});
+
+</script>
+  <script>/* js/systems/net.js */
+// Play a Friend: two phones in one room (4-letter code) through the Worker's RoomDO.
+// Each phone runs its own board with the full rules; the network carries what crosses over:
+// attacks, fog / haste, board snapshots (drawn as the friend's board) and fx events.
+(function (EB) {
+  'use strict';
+  const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const EL = { fire: 'f', water: 'w', nature: 'n', lightning: 'l', neutral: 'u', garbage: 'g' };
+  const EL_BACK = Object.fromEntries(Object.entries(EL).map(([k, v]) => [v, k]));
+  const FORWARD = new Set(['clear', 'lock', 'garbage', 'popup', 'reaction', 'skill', 'skillready', 'burst', 'cancel', 'absorb', 'shield', 'purify']);
+  const SNAP_EVERY = 0.07; // seconds between board snapshots (only sent when something changed)
+
+  const Net = {
+    ws: null, code: null, you: 0, players: [], status: 'idle', handlers: {},
+
+    available() {
+      try { return /^https?:$/.test(location.protocol) && /(^|\.)gilagames\.com$|\.workers\.dev$|^localhost$|^127\.0\.0\.1$/.test(location.hostname); } catch (e) { return false; }
+    },
+    newCode() {
+      const b = new Uint8Array(4);
+      crypto.getRandomValues(b);
+      return Array.from(b, (x) => CODE_CHARS[x % CODE_CHARS.length]).join('');
+    },
+    cleanCode(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/[IO01]/g, '').slice(0, 4); },
+    link(code) { return location.origin + location.pathname + '?room=' + code; },
+
+    // on: { room(players, you), start(msg), msg(m), left(), closed(reason), full() }
+    connect(code, hello, on) {
+      Net.leave();
+      Net.code = code; Net.handlers = on || {}; Net.status = 'connecting'; Net.hello = hello;
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      let ws;
+      try { ws = new WebSocket(`${proto}//${location.host}/api/room/${code}`); } catch (e) { Net.fail('Could not connect.'); return; }
+      Net.ws = ws;
+      ws.onopen = () => { Net.status = 'open'; Net.raw({ t: 'hello', ...hello }); Net.ping = setInterval(() => Net.raw({ t: 'ping', id: Date.now() }), 20000); };
+      ws.onmessage = (e) => {
+        let m; try { m = JSON.parse(e.data); } catch (err) { return; }
+        const h = Net.handlers;
+        switch (m.t) {
+          case 'room': Net.you = m.you; Net.players = m.players; if (h.room) h.room(m.players, m.you); break;
+          case 'start': if (h.start) h.start(m); break;
+          case 'full': Net.status = 'full'; if (h.full) h.full(); break;
+          case 'left': if (Net.match) Net.match.friendLeft(); if (h.left) h.left(); break;
+          case 'pong': break;
+          default: if (Net.match) Net.match.onMessage(m);
+        }
+      };
+      ws.onclose = () => {
+        clearInterval(Net.ping);
+        if (Net.ws !== ws) return;
+        const was = Net.status; Net.status = 'closed'; Net.ws = null;
+        if (Net.match) Net.match.friendLeft(true);
+        if (was !== 'full' && Net.handlers.closed) Net.handlers.closed();
+      };
+      ws.onerror = () => {};
+    },
+    fail(msg) { Net.status = 'closed'; if (Net.handlers.closed) Net.handlers.closed(msg); },
+    raw(m) { if (Net.ws && Net.ws.readyState === 1) Net.ws.send(JSON.stringify(m)); },
+    ready(on) { Net.raw({ t: 'ready', on: on !== false }); },
+    leave() {
+      Net.match = null;
+      const ws = Net.ws; Net.ws = null; Net.status = 'idle'; Net.players = [];
+      clearInterval(Net.ping);
+      if (ws) try { ws.close(1000, 'leave'); } catch (e) { /* closed */ }
+    },
+
+    // the per-battle link handed to EB.Battle as o.online
+    makeMatch() {
+      const m = {
+        battle: null, lastSnap: '', snapT: 0, over: false,
+        send(msg) { Net.raw(msg); },
+        event(type, data) {
+          if (!FORWARD.has(type)) return;
+          const d = Object.assign({}, data); delete d.side;
+          Net.raw({ t: 'ev', type, d });
+        },
+        // called every frame by the game loop: send our board when it changed
+        tick(dt) {
+          const b = m.battle; if (!b) return;
+          m.snapT += dt;
+          if (m.snapT < SNAP_EVERY) return;
+          m.snapT = 0;
+          const s = snapshot(b.player);
+          const key = JSON.stringify(s);
+          if (key !== m.lastSnap) { m.lastSnap = key; Net.raw({ t: 'st', s }); }
+        },
+        onMessage(msg) {
+          const b = m.battle; if (!b) return;
+          if (msg.t === 'atk') b.remoteAttack(msg.lines, msg.el, msg.row);
+          else if (msg.t === 'fx') {
+            const secs = Math.max(0, Math.min(15, +msg.secs || 0));
+            if (msg.kind === 'fog') { b.player.fogUntil = b.time + secs; b.emit('fog', { side: 'top', remote: true }); }
+            if (msg.kind === 'haste') { b.player.hastedUntil = b.time + secs; b.player.popup('HASTED!', '#ffe14a', true); }
+          } else if (msg.t === 'st') applySnapshot(b.ai, msg.s);
+          else if (msg.t === 'ev' && FORWARD.has(msg.type)) b.emit(msg.type, Object.assign({}, msg.d, { side: 'bottom', remote: true }));
+          else if (msg.t === 'dead') { if (!b.ai.dead) { b.ai.dead = true; b.ai.piece = null; b.emit('topout', { side: 'bottom', remote: true }); } }
+        },
+        friendLeft(closed) {
+          const b = m.battle;
+          if (!b || b.state === 'over') return;
+          b.end('player', closed ? 'Connection lost' : 'Your friend left the match');
+          if (closed) b.result.disconnected = true;
+        },
+      };
+      Net.match = m;
+      return m;
+    },
+  };
+
+  // ---- board snapshots ----
+  function encodeGrid(grid) {
+    let s = '';
+    for (const row of grid) for (const c of row) s += c ? (EL[c.el] || 'u') + (c.shape || '.') : '..';
+    return s;
+  }
+  function snapshot(f) {
+    const p = f.piece;
+    return {
+      g: encodeGrid(f.board.grid),
+      p: p ? [p.card.id, p.rot, p.x, p.y] : null,
+      h: f.deck.hold ? f.deck.hold.id : null,
+      q: f.deck.queue.slice(0, 3).map((c) => c.id),
+      k: f.skillCharge, sh: f.shield, cb: f.combo, inc: f.pendingLines(),
+      en: f.energy, au: f.aura ? [f.aura.el, Math.max(0, f.aura.until - f.battle.time)] : null,
+      s: { lines: f.stats.lines, sent: f.stats.sent, pieces: f.stats.pieces, maxCombo: f.stats.maxCombo, received: f.stats.received, reactions: f.stats.reactions, quads: f.stats.quads, cancelled: f.stats.cancelled, absorbed: f.stats.absorbed, bursts: f.stats.bursts },
+      d: f.dead ? 1 : 0,
+    };
+  }
+  function applySnapshot(f, s) {
+    if (!s || typeof s.g !== 'string') return;
+    const B = f.board, g = s.g;
+    if (g.length === B.rows * B.cols * 2) {
+      let i = 0;
+      for (let r = 0; r < B.rows; r++) for (let c = 0; c < B.cols; c++, i += 2) {
+        const e = g[i], sh = g[i + 1];
+        B.grid[r][c] = e === '.' ? null : e === 'g' ? { el: 'garbage', kind: 'garbage' } : { el: EL_BACK[e] || 'neutral', shape: sh === '.' ? 'O' : sh, kind: 'block' };
+      }
+    }
+    if (s.p && EB.CARDS[s.p[0]]) {
+      const def = EB.CARDS[s.p[0]];
+      f.piece = { card: { id: s.p[0], lvl: 1 }, shape: def.shape, el: def.element, rot: s.p[1] | 0, x: s.p[2] | 0, y: s.p[3] | 0 };
+    } else f.piece = null;
+    f.deck.hold = s.h && EB.CARDS[s.h] ? { id: s.h, lvl: 1 } : null;
+    if (Array.isArray(s.q)) f.deck.queue = s.q.filter((id) => EB.CARDS[id]).map((id) => ({ id, lvl: 1 }));
+    f.skillCharge = +s.k || 0; f.shield = +s.sh || 0; f.combo = +s.cb || 0;
+    f.incoming = s.inc ? [{ lines: +s.inc, hole: 0, readyAt: 0 }] : [];
+    if (s.en && typeof s.en === 'object') for (const el of EB.ELEMENT_IDS) f.energy[el] = +s.en[el] || 0;
+    f.aura = s.au ? { el: s.au[0], until: f.battle.time + (+s.au[1] || 0) } : null;
+    if (s.s) Object.assign(f.stats, s.s);
+    if (s.d && !f.dead) { f.dead = true; f.piece = null; }
+  }
+
+  EB.Net = Net;
 })(globalThis.EB = globalThis.EB || {});
 
 </script>
@@ -4750,6 +4938,7 @@ p { line-height: 1.5; }
           <button class="btn primary" data-act="play">${ico('sword', 32)} New Run</button>
           <button class="btn" data-act="cont" ${run && run.status === 'map' ? '' : 'disabled'}>${ico('campfire', 32)} Continue Run${run && run.status === 'map' ? ` <span class="tiny dim">D${(run.dungeon || 0) + 1} F${Math.max(1, run.floor + 1)}</span>` : ''}</button>
           <button class="btn" data-act="quick">${ico('lightning', 32)} Quick Battle</button>
+          <button class="btn" data-act="friend">${ico('sword', 32)} Play a Friend</button>
           <div class="row" style="gap:0">
             <button class="btn sm grow" data-act="deck">${ico('deck', 32)} Deck</button>
             <button class="btn sm grow" data-act="cards">${ico('card', 32)} Cards</button>
@@ -4774,6 +4963,7 @@ p { line-height: 1.5; }
         },
         cont() { UI.map(); },
         quick: () => UI.quick(),
+        friend: () => UI.friend(),
         deck: () => UI.deck(UI.title),
         cards: () => UI.collection(),
         relics: () => UI.relicCollection(),
@@ -5061,7 +5251,16 @@ p { line-height: 1.5; }
       ];
       let runInfo = '', actions = '';
       const h = {};
-      if (ctx.quick) {
+      if (ctx.pvp) {
+        actions = `<button class="btn" data-act="leave">Leave room</button><button class="btn primary" data-act="again" ${EB.Net.ws ? '' : 'disabled'}>Rematch</button>`;
+        h.leave = () => { EB.Net.leave(); UI.title(); };
+        h.again = () => {
+          EB.Net.ready(true);
+          const b = modal.open(`<h2 style="text-align:center">Rematch</h2><p class="small" style="text-align:center">Waiting for your friend to press Rematch…</p>
+            <div class="row center mt"><button class="btn" data-act="cancel">Cancel</button></div>`, true);
+          bind(b.parentElement, { cancel: () => { EB.Net.ready(false); modal.close(); } });
+        };
+      } else if (ctx.quick) {
         actions = `<button class="btn" data-act="menu">Menu</button><button class="btn" data-act="setup">Change Setup</button><button class="btn primary" data-act="again">Rematch</button>`;
         h.menu = UI.title; h.setup = UI.quick; h.again = ctx.rematch;
       } else {
@@ -5088,11 +5287,111 @@ p { line-height: 1.5; }
         <div class="result-title ${win ? 'win' : 'lose'}">${win ? 'VICTORY!' : draw ? 'DRAW' : 'DEFEAT'}</div>
         <p class="center small dim" style="text-align:center">${esc(res.reason)}</p>
         <div class="panel"><div class="statgrid">
-          <span class="h"></span><span class="h you">YOU</span><span class="h foe">FOE</span>
+          <span class="h"></span><span class="h you">YOU</span><span class="h foe">${ctx.pvp ? 'FRIEND' : 'FOE'}</span>
           ${rows.map(([k, x, y]) => `<span class="small">${k}</span><span class="you">${x}</span><span class="foe">${y}</span>`).join('')}
         </div>${runInfo}</div>
         <div class="row center">${actions}</div>
       </div>`, h);
+    },
+
+    // ================= PLAY A FRIEND (two phones, one room code) =================
+    friend(code) {
+      const N = EB.Net, st = save().settings;
+      let hero = EB.HEROES[st.friendHero] ? st.friendHero : (st.lastHero && EB.HEROES[st.lastHero] ? st.lastHero : 'ignis');
+      let join = N.cleanCode(code || '');
+      if (!N.available()) {
+        return UI.show(`<div class="wrap"><div class="row spread"><h2>Play a Friend</h2><button class="btn sm" data-act="back">Back</button></div>
+          <div class="panel"><p class="small">Playing with a friend needs the website version. Open <b>spellbricks.gilagames.com</b> on both phones.</p></div></div>`, { back: UI.title });
+      }
+      const render = () => {
+        UI.show(`<div class="wrap">
+          <div class="row spread"><h2>Play a Friend</h2><button class="btn sm" data-act="back">Back</button></div>
+          <p class="small dim">Battle a friend on their own phone. One of you creates a room and shares the code; the other joins with it. Every hero is open here.</p>
+          <h3>Your hero</h3>
+          <div class="row mb">${EB.HERO_IDS.map((id) => `<button class="btn sm ${id === hero ? 'sel' : ''}" data-act="hero" data-arg="${id}"><img class="foe-ico" src="${EB.Pix.portraitURL({ hero: id }, 2)}" alt="">${esc(EB.HEROES[id].name)}</button>`).join('')}</div>
+          <p class="tiny dim mb">${esc(EB.HEROES[hero].title)} · ${esc(EB.HEROES[hero].passive.name)}: ${esc(EB.HEROES[hero].passive.desc)} · Skill ${esc(EB.HEROES[hero].skill.name)}: ${esc(EB.HEROES[hero].skill.desc)}</p>
+          <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+            <div class="panel"><h3>Create a room</h3><p class="small">You get a 4-letter code to send to your friend.</p>
+              <button class="btn primary wide" data-act="create">${ico('sword', 32)} Create room</button></div>
+            <div class="panel"><h3>Join a room</h3><p class="small">Type the code your friend sent you.</p>
+              <div class="row"><input id="roomCode" class="code-input" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD" value="${esc(join)}" aria-label="Room code">
+              <button class="btn primary" data-act="join">Join</button></div></div>
+          </div>
+        </div>`, {
+          back: UI.title,
+          hero(a) { if (EB.HEROES[a]) { hero = a; st.friendHero = a; save().write(); join = N.cleanCode((document.getElementById('roomCode') || {}).value); render(); } },
+          create() { UI.lobby(N.newCode(), hero); },
+          join() {
+            const c = N.cleanCode(document.getElementById('roomCode').value);
+            if (c.length !== 4) { toast('Room codes have 4 letters'); return; }
+            UI.lobby(c, hero);
+          },
+        });
+        const inp = document.getElementById('roomCode');
+        inp.oninput = () => { inp.value = N.cleanCode(inp.value); };
+        inp.onkeydown = (e) => { if (e.key === 'Enter') document.querySelector('[data-act="join"]').click(); };
+      };
+      render();
+      if (join.length === 4) UI.lobby(join, hero);
+    },
+
+    lobby(code, hero) {
+      const N = EB.Net, st = save().settings;
+      const g = EB.ArenaRenderer.gridFor(window.innerWidth, window.innerHeight, st.cols || 15);
+      let note = 'Connecting…', state = 'wait', onLobby = true;
+      const view = () => {
+        if (EB.Game.battle || !onLobby) return; // during a match / on the result screen the lobby stays hidden
+        const me = N.players.find((p) => p.slot === N.you), friend = N.players.find((p) => p.slot !== N.you);
+        const who = (p) => `<div class="item"><img src="${EB.Pix.portraitURL({ hero: p.hero || 'ignis' }, 3)}" alt="" style="width:40px;height:49px"><div class="grow"><div class="t">${p.slot === N.you ? 'You' : 'Friend'} · ${esc((EB.HEROES[p.hero] || {}).name || '')}</div></div></div>`;
+        UI.show(`<div class="wrap" style="text-align:center">
+          <div class="row spread"><h2>Room</h2><button class="btn sm" data-act="leave">Leave</button></div>
+          <p class="small dim">Room code</p>
+          <div class="room-code">${esc(code)}</div>
+          <div class="row center mb"><button class="btn sm" data-act="share">Share link</button><button class="btn sm" data-act="copy">Copy code</button></div>
+          <div class="panel" style="text-align:left"><div class="list">${me ? who(me) : ''}${friend ? who(friend) : `<div class="item"><span class="spin" aria-hidden="true"></span><div class="grow"><div class="t dim">Waiting for your friend…</div><div class="d">Send them the code or the link. They open the game, tap Play a Friend and join.</div></div></div>`}</div></div>
+          <p class="small ${state === 'err' ? 'lose' : 'dim'}">${esc(note)}</p>
+          ${state === 'err' ? '<button class="btn primary" data-act="retry">Try again</button>' : ''}
+        </div>`, {
+          leave() { N.leave(); UI.friend(); },
+          retry() { connect(); },
+          copy() { try { navigator.clipboard.writeText(code).then(() => toast('Code copied'), () => toast(code)); } catch (e) { toast(code); } },
+          share() {
+            const url = N.link(code), text = `Battle me in Spellbricks! Room code ${code}`;
+            if (navigator.share) navigator.share({ title: 'Spellbricks', text, url }).catch(() => {});
+            else { try { navigator.clipboard.writeText(url).then(() => toast('Link copied'), () => toast(url)); } catch (e) { toast(url); } }
+          },
+        });
+      };
+      const connect = () => {
+        note = 'Connecting…'; state = 'wait'; view();
+        N.connect(code, { hero, cols: st.cols || 15, rows: g.rows, garbage: st.garbageMode === 'classic' ? 'classic' : 'direct' }, {
+          room(players) { note = players.length < 2 ? 'Room is open.' : 'Friend found! Starting…'; state = 'ok'; view(); },
+          start(msg) { onLobby = false; UI.startFriend(msg, hero, code); },
+          full() { note = 'This room already has two players. Check the code or create a new room.'; state = 'err'; view(); },
+          left() { if (!EB.Game.battle) { note = 'Your friend left the room. Waiting for them to come back…'; modal.close(); onLobby = true; view(); } },
+          closed(msg) { if (EB.Game.battle) return; note = msg || 'Connection lost.'; state = 'err'; modal.close(); onLobby = true; view(); },
+        });
+      };
+      UI.lobbyView = view;
+      connect();
+    },
+
+    startFriend(msg, hero, code) {
+      modal.close();
+      const foe = msg.foe || {}, fh = EB.HEROES[foe.hero] ? foe.hero : 'ignis';
+      const deck = (id) => EB.HEROES[id].deck.map((c) => EB.makeCard(c));
+      const match = EB.Net.makeMatch();
+      const cfg = {
+        mode: 'pvp', online: match, grid: { cols: msg.cols, rows: msg.rows }, garbage: msg.garbage, seed: (msg.seed + EB.Net.you * 7919) >>> 0,
+        player: { name: EB.HEROES[hero].name, hero, cards: deck(hero), relics: [], portrait: { hero } },
+        enemy: { name: EB.HEROES[fh].name, hero: fh, cards: deck(fh), relics: [], level: 0, portrait: { hero: fh } },
+        label: 'VS FRIEND', playerSub: 'ROOM ' + code, enemySub: 'FRIEND',
+        music: 'battle', track: { hero, enemy: fh, tier: 'normal' },
+      };
+      EB.Game.startBattle(cfg, (res) => {
+        EB.Net.match = null;
+        UI.result(res, { pvp: true });
+      });
     },
 
     // ================= REWARDS =================
@@ -5658,9 +5957,12 @@ p { line-height: 1.5; }
       pb.onclick = () => Game.pause();
       Game.applyTouch();
       window.addEventListener('resize', () => { if (Game.renderer) { Game.renderer.resize(); Game.placePause(); } });
-      document.addEventListener('visibilitychange', () => { if (document.hidden && Game.battle && !Game.paused && Game.battle.state !== 'over') Game.pause(); });
+      document.addEventListener('visibilitychange', () => { if (document.hidden && Game.battle && !Game.paused && Game.battle.state !== 'over' && !Game.cfg.online) Game.pause(); });
       EB.Track.open();
-      const go = () => EB.UI.title();
+      // a shared Play a Friend link: ?room=ABCD opens the join screen with the code filled in
+      let room = null;
+      try { room = new URLSearchParams(location.search).get('room'); if (room) history.replaceState(null, '', location.pathname); } catch (e) { /* file:// */ }
+      const go = () => (room ? EB.UI.friend(room) : EB.UI.title());
       if (document.fonts && document.fonts.load) document.fonts.load('12px "Press Start 2P"').then(go, go); else go();
     },
 
@@ -5709,13 +6011,15 @@ p { line-height: 1.5; }
       // board size and match length come from Settings: the board fills the arena width
       const st = EB.Save.settings;
       const stage = document.getElementById('stage');
-      const grid = EB.ArenaRenderer.gridFor(stage.clientWidth, stage.clientHeight, st.cols || 15);
+      // Play a Friend: both phones use the room's board size and rules, with no time limit
+      const grid = cfg.grid || EB.ArenaRenderer.gridFor(stage.clientWidth, stage.clientHeight, st.cols || 15);
       EB.CONFIG.COLS = grid.cols;
       EB.CONFIG.ROWS = grid.rows;
       EB.CONFIG.DANGER_WARN_HEIGHT = grid.rows - EB.CONFIG.DANGER_ROWS - Math.max(3, Math.round(grid.rows * 0.2));
-      EB.CONFIG.GARBAGE_MODE = st.garbageMode === 'classic' ? 'classic' : 'direct';
-      EB.CONFIG.MATCH_TIME = !st.matchTime ? Infinity : st.matchTime * 60; // 0 / unset = no limit
+      EB.CONFIG.GARBAGE_MODE = (cfg.garbage || st.garbageMode) === 'classic' ? 'classic' : 'direct';
+      EB.CONFIG.MATCH_TIME = cfg.online || !st.matchTime ? Infinity : st.matchTime * 60; // 0 / unset = no limit
       const b = new EB.Battle(Object.assign({ seed: EB.newSeed() }, cfg));
+      if (cfg.online) cfg.online.battle = b;
       Game.battle = b;
       Game.renderer = new EB.ArenaRenderer(document.getElementById('cv'), b, { label: cfg.label, playerSub: cfg.playerSub, enemySub: cfg.enemySub, theme: cfg.theme });
       Game.placePause();
@@ -5740,6 +6044,7 @@ p { line-height: 1.5; }
         let dt = Math.min(0.1, (now - last) / 1000);
         last = now;
         if (!Game.paused) {
+          if (cfg.online) cfg.online.tick(dt);
           // fixed sub-steps keep gravity / AI timing stable on slow frames
           while (dt > 0) {
             const s = Math.min(dt, 1 / 120);
@@ -5794,6 +6099,8 @@ p { line-height: 1.5; }
       Game.ending = true;
       EB.Save.recordBattle(res);
       EB.Track.battle(res, Game.cfg);
+      // Play a Friend: tell the friend's phone we topped out (or gave up)
+      if (Game.cfg.online && res.winner !== 'player' && !res.disconnected) { Game.cfg.online.tick(1); EB.Net.raw({ t: 'dead' }); }
       EB.Audio.music(null);
       EB.Audio.sfx(res.winner === 'player' ? 'victory' : 'defeat');
       const cb = Game.onEnd;
@@ -5851,6 +6158,7 @@ p { line-height: 1.5; }
     pause() {
       const b = Game.battle;
       if (!b || b.state === 'over' || Game.paused) return;
+      if (Game.cfg.online) return Game.onlineMenu();
       Game.paused = true;
       if (Game.input) Game.input.releaseAll();
       const st = EB.Save.settings;
@@ -5885,6 +6193,21 @@ p { line-height: 1.5; }
           EB.Audio.music(null);
           if (mode === 'run') EB.UI.map(); else EB.UI.title();
         },
+      });
+    },
+
+    // Play a Friend can't stop time: the menu floats over the running match
+    onlineMenu() {
+      const b = Game.battle;
+      const box = modal.open(`<h2 style="text-align:center">MATCH MENU</h2>
+        <p class="small dim" style="text-align:center">The match keeps running while this is open.</p>
+        <div class="list mt">
+          <button class="btn primary wide" data-act="resume">Back to the match</button>
+          <button class="btn wide" data-act="forfeit">Give up</button>
+        </div>`, true);
+      bind(box.parentElement, {
+        resume: () => modal.close(),
+        forfeit() { modal.close(); if (b.state !== 'over') { b.player.die('forfeit'); b.end('ai', 'You gave up'); } },
       });
     },
 

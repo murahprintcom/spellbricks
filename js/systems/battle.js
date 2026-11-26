@@ -17,7 +17,11 @@
       this.projectiles = [];
       this.result = null;
       this.player = new EB.Fighter(this, Object.assign({ side: 'top', seed: this.rng.int(1e9) }, o.player));
-      this.ai = new EB.Fighter(this, Object.assign({ side: 'bottom', seed: this.rng.int(1e9), isAI: true }, o.enemy));
+      this.ai = new EB.Fighter(this, Object.assign({ side: 'bottom', seed: this.rng.int(1e9), isAI: !o.online }, o.enemy));
+      // Play a Friend: the bottom board is a puppet drawn from the friend's snapshots (EB.Net);
+      // attacks, effects and events go over the network instead of into it.
+      this.online = o.online || null;
+      if (this.online) { this.ai.remote = true; return; }
       const lvl = EB.AI_LEVELS[EB.util.clamp(o.enemy.level || 0, 0, EB.AI_LEVELS.length - 1)];
       this.aiCtrl = new EB.AIController(this.ai, lvl, o.enemy.speed || 1);
       // optional: let the AI also drive the player (used by automated tests / attract mode)
@@ -27,6 +31,7 @@
     on(fn) { this.listeners.push(fn); }
     emit(type, data) {
       for (const fn of this.listeners) fn(type, data || {});
+      if (this.online && data && data.side === 'top' && !data.remote) this.online.event(type, data);
       if (type === 'clear' && this.state === 'sudden') {
         this.end(data.side === 'top' ? 'player' : 'ai', 'Sudden death: first line clear');
       }
@@ -52,6 +57,24 @@
         row: fromRows[Math.floor(fromRows.length / 2)],
       });
       this.emit('attack', { side: from.side, lines, el });
+      if (this.online && from === this.player) this.online.send({ t: 'atk', lines, el, row: this.projectiles[this.projectiles.length - 1].row });
+    }
+
+    // an attack the friend sent: it flies across, then lands on our board
+    remoteAttack(lines, el, row) {
+      if (this.state === 'over') return;
+      lines = Math.max(0, Math.min(20, lines | 0));
+      if (!lines) return;
+      this.ai.stats.sent += lines;
+      this.projectiles.push({ from: 'bottom', to: 'top', lines, el, t: 0, dur: C().PROJECTILE_TIME, row: row == null ? C().ROWS - 1 : row });
+      this.emit('attack', { side: 'bottom', lines, el, remote: true });
+    }
+
+    // effects that land on the other fighter (fog, haste): sent over the network in Play a Friend
+    affect(target, kind, secs) {
+      if (this.online && target === this.ai) { this.online.send({ t: 'fx', kind, secs }); return; }
+      if (kind === 'fog') { target.fogUntil = this.time + secs; this.emit('fog', { side: target.side, remote: true }); }
+      if (kind === 'haste') target.hastedUntil = this.time + secs;
     }
 
     update(dt) {
@@ -73,8 +96,7 @@
       this.time += dt;
       this.timeLeft -= dt;
       this.player.update(dt);
-      this.ai.update(dt);
-      this.aiCtrl.update(dt);
+      if (!this.online) { this.ai.update(dt); this.aiCtrl.update(dt); }
       if (this.playerCtrl) this.playerCtrl.update(dt);
 
       for (let i = this.projectiles.length - 1; i >= 0; i--) {
@@ -83,6 +105,7 @@
         if (p.t >= p.dur) {
           this.projectiles.splice(i, 1);
           const target = this.fighter(p.to);
+          if (target.remote) { this.emit('hit', { side: p.to, lines: p.lines, el: p.el }); continue; } // the friend's phone applies it
           target.receive(p.lines, p.el);
           // direct mode: garbage lands the moment the attack arrives (no queue, no counter)
           if (C().GARBAGE_MODE === 'direct') { let guard = 10; while (target.incoming.length && !target.dead && guard--) target.applyGarbage(true); }
@@ -93,7 +116,7 @@
       const pd = this.player.dead, ad = this.ai.dead;
       if (pd || ad) {
         if (pd && ad) this.end('draw', 'Both stacks overflowed');
-        else this.end(pd ? 'ai' : 'player', (pd ? 'Your' : 'Enemy') + ' stack reached the danger line');
+        else this.end(pd ? 'ai' : 'player', (pd ? 'Your' : this.online ? "Your friend's" : 'Enemy') + ' stack reached the danger line');
         return;
       }
       if (this.timeLeft <= 0) this.timeUp();

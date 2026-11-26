@@ -68,7 +68,7 @@
         desc: "The foe's blocks fall twice as fast for 6 seconds.",
         use(f) {
           const o = f.opp;
-          o.hastedUntil = f.battle.time + 6;
+          f.battle.affect(o, 'haste', 6);
           o.popup('HASTED!', '#ffe14a', true);
           f.battle.emit('shake', { side: o.side, power: 4 });
         },

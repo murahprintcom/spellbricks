@@ -221,7 +221,7 @@
         energy(el, n) { EB.Elemental.add(f, el, n); },
         comboAdd(n) { f.combo += n; ctx.combo = f.combo; },
         guardCombo() { f.comboGuard = true; },
-        fogOpponent(s) { const o = f.opp; if (o) { o.fogUntil = f.battle.time + s; f.battle.emit('fog', { side: o.side }); } },
+        fogOpponent(s) { const o = f.opp; if (o) f.battle.affect(o, 'fog', s); },
         charge(s) { f.chargedUntil = f.battle.time + s; f.popup('CHARGED', '#ffe14a'); },
         shake(p) { f.battle.emit('shake', { side: f.opp ? f.opp.side : f.side, power: p }); },
         storeBonus(n, max) { f.storedBonus = Math.min(max, f.storedBonus + n); },

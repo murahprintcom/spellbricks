@@ -23,9 +23,12 @@
       pb.onclick = () => Game.pause();
       Game.applyTouch();
       window.addEventListener('resize', () => { if (Game.renderer) { Game.renderer.resize(); Game.placePause(); } });
-      document.addEventListener('visibilitychange', () => { if (document.hidden && Game.battle && !Game.paused && Game.battle.state !== 'over') Game.pause(); });
+      document.addEventListener('visibilitychange', () => { if (document.hidden && Game.battle && !Game.paused && Game.battle.state !== 'over' && !Game.cfg.online) Game.pause(); });
       EB.Track.open();
-      const go = () => EB.UI.title();
+      // a shared Play a Friend link: ?room=ABCD opens the join screen with the code filled in
+      let room = null;
+      try { room = new URLSearchParams(location.search).get('room'); if (room) history.replaceState(null, '', location.pathname); } catch (e) { /* file:// */ }
+      const go = () => (room ? EB.UI.friend(room) : EB.UI.title());
       if (document.fonts && document.fonts.load) document.fonts.load('12px "Press Start 2P"').then(go, go); else go();
     },
 
@@ -74,13 +77,15 @@
       // board size and match length come from Settings: the board fills the arena width
       const st = EB.Save.settings;
       const stage = document.getElementById('stage');
-      const grid = EB.ArenaRenderer.gridFor(stage.clientWidth, stage.clientHeight, st.cols || 15);
+      // Play a Friend: both phones use the room's board size and rules, with no time limit
+      const grid = cfg.grid || EB.ArenaRenderer.gridFor(stage.clientWidth, stage.clientHeight, st.cols || 15);
       EB.CONFIG.COLS = grid.cols;
       EB.CONFIG.ROWS = grid.rows;
       EB.CONFIG.DANGER_WARN_HEIGHT = grid.rows - EB.CONFIG.DANGER_ROWS - Math.max(3, Math.round(grid.rows * 0.2));
-      EB.CONFIG.GARBAGE_MODE = st.garbageMode === 'classic' ? 'classic' : 'direct';
-      EB.CONFIG.MATCH_TIME = !st.matchTime ? Infinity : st.matchTime * 60; // 0 / unset = no limit
+      EB.CONFIG.GARBAGE_MODE = (cfg.garbage || st.garbageMode) === 'classic' ? 'classic' : 'direct';
+      EB.CONFIG.MATCH_TIME = cfg.online || !st.matchTime ? Infinity : st.matchTime * 60; // 0 / unset = no limit
       const b = new EB.Battle(Object.assign({ seed: EB.newSeed() }, cfg));
+      if (cfg.online) cfg.online.battle = b;
       Game.battle = b;
       Game.renderer = new EB.ArenaRenderer(document.getElementById('cv'), b, { label: cfg.label, playerSub: cfg.playerSub, enemySub: cfg.enemySub, theme: cfg.theme });
       Game.placePause();
@@ -105,6 +110,7 @@
         let dt = Math.min(0.1, (now - last) / 1000);
         last = now;
         if (!Game.paused) {
+          if (cfg.online) cfg.online.tick(dt);
           // fixed sub-steps keep gravity / AI timing stable on slow frames
           while (dt > 0) {
             const s = Math.min(dt, 1 / 120);
@@ -159,6 +165,8 @@
       Game.ending = true;
       EB.Save.recordBattle(res);
       EB.Track.battle(res, Game.cfg);
+      // Play a Friend: tell the friend's phone we topped out (or gave up)
+      if (Game.cfg.online && res.winner !== 'player' && !res.disconnected) { Game.cfg.online.tick(1); EB.Net.raw({ t: 'dead' }); }
       EB.Audio.music(null);
       EB.Audio.sfx(res.winner === 'player' ? 'victory' : 'defeat');
       const cb = Game.onEnd;
@@ -216,6 +224,7 @@
     pause() {
       const b = Game.battle;
       if (!b || b.state === 'over' || Game.paused) return;
+      if (Game.cfg.online) return Game.onlineMenu();
       Game.paused = true;
       if (Game.input) Game.input.releaseAll();
       const st = EB.Save.settings;
@@ -250,6 +259,21 @@
           EB.Audio.music(null);
           if (mode === 'run') EB.UI.map(); else EB.UI.title();
         },
+      });
+    },
+
+    // Play a Friend can't stop time: the menu floats over the running match
+    onlineMenu() {
+      const b = Game.battle;
+      const box = modal.open(`<h2 style="text-align:center">MATCH MENU</h2>
+        <p class="small dim" style="text-align:center">The match keeps running while this is open.</p>
+        <div class="list mt">
+          <button class="btn primary wide" data-act="resume">Back to the match</button>
+          <button class="btn wide" data-act="forfeit">Give up</button>
+        </div>`, true);
+      bind(box.parentElement, {
+        resume: () => modal.close(),
+        forfeit() { modal.close(); if (b.state !== 'over') { b.player.die('forfeit'); b.end('ai', 'You gave up'); } },
       });
     },
 
